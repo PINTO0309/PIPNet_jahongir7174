@@ -22,8 +22,7 @@ warnings.filterwarnings("ignore")
 
 def train(args, params):
     # Model
-    model = nn.PIPNet(args, params, '18',
-                      *util.compute_indices(f'{data_dir}/indices.txt', params))
+    model = nn.PIPNet(args, params, '18', *util.compute_indices(f'{data_dir}/indices.txt', params))
     model = util.load_weight('./weights/IR18.pth', model)
     model.cuda()
 
@@ -177,10 +176,54 @@ def demo(args, params):
     model = torch.load('./weights/best.pt', 'cuda')
     model = model['model'].float().fuse()
 
-    detector = util.FaceDetector('./weights/detection.onnx')
+    # detector = util.FaceDetector('./weights/detection.onnx')
 
-    model.half()
+    model.cpu()
     model.eval()
+
+    import onnx
+    from onnxsim import simplify
+    from sbi4onnx import initialize
+    RESOLUTION = [
+        [256,256],
+        [224,224],
+        [192,192],
+        [160,160],
+        [128,128],
+    ]
+    MODEL = f'pipnet_{args.model_type}'
+    for H, W in RESOLUTION:
+        onnx_file = f"{MODEL}_1x3x{H}x{W}.onnx"
+        x = torch.randn(1, 3, H, W).cpu()
+        torch.onnx.export(
+            model,
+            args=(x),
+            f=onnx_file,
+            opset_version=11,
+            input_names=['input'],
+            output_names=['landmarks_xyscore'],
+        )
+        model_onnx1 = onnx.load(onnx_file)
+        model_onnx1 = onnx.shape_inference.infer_shapes(model_onnx1)
+        onnx.save(model_onnx1, onnx_file)
+        model_onnx2 = onnx.load(onnx_file)
+        model_simp, check = simplify(model_onnx2)
+        onnx.save(model_simp, onnx_file)
+        model_onnx2 = onnx.load(onnx_file)
+        model_simp, check = simplify(model_onnx2)
+        onnx.save(model_simp, onnx_file)
+        model_onnx2 = onnx.load(onnx_file)
+        model_simp, check = simplify(model_onnx2)
+        onnx.save(model_simp, onnx_file)
+
+        n_file = f"{MODEL}_Nx3x{H}x{W}.onnx"
+        initialize(onnx_file, None, n_file, 'N')
+
+    import sys
+    sys.exit(0)
+
+
+
 
     scale = 1.2
     stream = cv2.VideoCapture('./weights/demo.mp4')
@@ -197,7 +240,7 @@ def demo(args, params):
         # Capture frame-by-frame
         success, frame = stream.read()
         if success:
-            boxes = detector.detect(frame, (640, 640))
+            # boxes = detector.detect(frame, (640, 640))
             boxes = boxes.astype('int32')
             for box in boxes:
                 x_min = box[0]
@@ -258,6 +301,7 @@ def main():
     parser.add_argument('--batch-size', default=16, type=int)
     parser.add_argument('--local_rank', default=0, type=int)
     parser.add_argument('--epochs', default=120, type=int)
+    parser.add_argument('--model_type', type=str)
     parser.add_argument('--train', action='store_true')
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--demo', action='store_true')

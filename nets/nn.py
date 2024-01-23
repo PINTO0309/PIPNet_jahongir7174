@@ -56,8 +56,7 @@ class Residual(torch.nn.Module):
 
 
 class PIPNet(torch.nn.Module):
-    def __init__(self, args, params, depth,
-                 mean_indices, reverse_index1, reverse_index2, max_len):
+    def __init__(self, args, params, depth, mean_indices, reverse_index1, reverse_index2, max_len):
         super().__init__()
         self.p1 = []
         self.p2 = []
@@ -152,45 +151,43 @@ class PIPNet(torch.nn.Module):
         b, c, h, w = score.size()
         assert b == 1
 
-        score = score.view(b * c, -1)
-        max_idx = torch.argmax(score, 1).view(-1, 1)
-        max_idx_neighbor = max_idx.repeat(1, self.params['num_nb']).view(-1, 1)
-
-        offset_x = offset_x.view(b * c, -1)
-        offset_y = offset_y.view(b * c, -1)
-        offset_x_select = torch.gather(offset_x, 1, max_idx).squeeze(1)
-        offset_y_select = torch.gather(offset_y, 1, max_idx).squeeze(1)
-
-        neighbor_x = neighbor_x.view(b * self.params['num_nb'] * c, -1)
-        neighbor_y = neighbor_y.view(b * self.params['num_nb'] * c, -1)
-        neighbor_x_select = torch.gather(neighbor_x, 1, max_idx_neighbor)
-        neighbor_y_select = torch.gather(neighbor_y, 1, max_idx_neighbor)
-        neighbor_x_select = neighbor_x_select.squeeze(1).view(-1, self.params['num_nb'])
-        neighbor_y_select = neighbor_y_select.squeeze(1).view(-1, self.params['num_nb'])
-
-        offset_x = (max_idx % w).view(-1, 1).float() + offset_x_select.view(-1, 1)
-        offset_y = (max_idx // w).view(-1, 1).float() + offset_y_select.view(-1, 1)
+        score = score.view(b, c, h*w)
+        max_score, max_idx = torch.max(score, dim=2, keepdim=True)
+        max_idx_neighbor = max_idx.repeat(1, 1, self.params['num_nb']).view(b, c*self.params['num_nb'], 1)
+        offset_x = offset_x.view(b, c, h*w)
+        offset_y = offset_y.view(b, c, h*w)
+        offset_x_select = torch.gather(input=offset_x, dim=2, index=max_idx)
+        offset_y_select = torch.gather(input=offset_y, dim=2, index=max_idx)
+        neighbor_x = neighbor_x.view(b, self.params['num_nb'] * c, h*w)
+        neighbor_y = neighbor_y.view(b, self.params['num_nb'] * c, h*w)
+        neighbor_x_select = torch.gather(input=neighbor_x, dim=2, index=max_idx_neighbor)
+        neighbor_y_select = torch.gather(input=neighbor_y, dim=2, index=max_idx_neighbor)
+        neighbor_x_select = neighbor_x_select.view(b, c, self.params['num_nb'])
+        neighbor_y_select = neighbor_y_select.view(b, c, self.params['num_nb'])
+        offset_x = (max_idx % w).float() + offset_x_select.view(b, c, 1)
+        offset_y = (max_idx // w).float() + offset_y_select.view(b, c, 1)
         offset_x /= 1.0 * self.args.input_size / self.params['stride']
         offset_y /= 1.0 * self.args.input_size / self.params['stride']
-
-        neighbor_x = (max_idx % w).view(-1, 1).float() + neighbor_x_select
-        neighbor_y = (max_idx // w).view(-1, 1).float() + neighbor_y_select
-        neighbor_x = neighbor_x.view(-1, self.params['num_nb'])
-        neighbor_y = neighbor_y.view(-1, self.params['num_nb'])
+        neighbor_x = (max_idx % w).float() + neighbor_x_select
+        neighbor_y = (max_idx // w).float() + neighbor_y_select
+        neighbor_x = neighbor_x.view(b, c, self.params['num_nb'])
+        neighbor_y = neighbor_y.view(b, c, self.params['num_nb'])
         neighbor_x /= 1.0 * self.args.input_size / self.params['stride']
         neighbor_y /= 1.0 * self.args.input_size / self.params['stride']
 
         # merge neighbor predictions
-        neighbor_x = neighbor_x[self.reverse_index1, self.reverse_index2]
-        neighbor_y = neighbor_y[self.reverse_index1, self.reverse_index2]
-        neighbor_x = neighbor_x.view(self.params['num_lms'], self.max_len)
-        neighbor_y = neighbor_y.view(self.params['num_lms'], self.max_len)
+        rverse_index1_tensor = torch.tensor(self.reverse_index1)
+        rverse_index2_tensor = torch.tensor(self.reverse_index2)
+        combined_indices = rverse_index1_tensor * 10 + rverse_index2_tensor
+        neighbor_x = neighbor_x.view(b, self.params['num_lms'] * self.params['num_nb'])
+        neighbor_y = neighbor_y.view(b, self.params['num_lms'] * self.params['num_nb'])
+        neighbor_x = neighbor_x[:, combined_indices].view(b, self.params['num_lms'], self.max_len)
+        neighbor_y = neighbor_y[:, combined_indices].view(b, self.params['num_lms'], self.max_len)
+        offset_x = torch.mean(torch.cat((offset_x, neighbor_x), dim=2), dim=2, keepdim=True)
+        offset_y = torch.mean(torch.cat((offset_y, neighbor_y), dim=2), dim=2, keepdim=True)
 
-        offset_x = torch.mean(torch.cat((offset_x, neighbor_x), dim=1), dim=1).view(-1, 1)
-        offset_y = torch.mean(torch.cat((offset_y, neighbor_y), dim=1), dim=1).view(-1, 1)
-
-        output = torch.cat((offset_x, offset_y), dim=1)
-        return torch.flatten(output).cpu().numpy()
+        output = torch.cat((offset_x, offset_y, max_score), dim=2)
+        return output
 
     def fuse(self):
         for m in self.modules():
