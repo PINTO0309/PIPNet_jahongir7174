@@ -13,6 +13,7 @@ from timm import utils
 from torch.utils import data
 
 from nets import nn
+from nets.nn import PIPNet
 from utils import util
 from utils.dataset import Dataset
 
@@ -173,7 +174,7 @@ def demo(args, params):
     std = numpy.array([58.395, 57.12, 57.375], 'float64').reshape(1, -1)
     mean = numpy.array([58.395, 57.12, 57.375], 'float64').reshape(1, -1)
 
-    model = torch.load('./weights/best.pt', 'cuda')
+    model = torch.load(f'./weights/best.pt', 'cuda')
     model = model['model'].float().fuse()
 
     # detector = util.FaceDetector('./weights/detection.onnx')
